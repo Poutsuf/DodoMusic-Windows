@@ -2122,6 +2122,47 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
+.lyrics-matched-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    opacity: 0.9;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 440px;
+}
+
+.lyrics-manual-search-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 24px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    flex-wrap: wrap;
+}
+
+.lyrics-manual-input {
+    flex: 1 1 180px;
+    min-width: 150px;
+    padding: 9px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(0, 0, 0, 0.35);
+    color: #ffffff;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s ease;
+}
+
+.lyrics-manual-input:focus {
+    border-color: var(--accent-color);
+}
+
 .pulse-indicator {
     width: 7px;
     height: 7px;

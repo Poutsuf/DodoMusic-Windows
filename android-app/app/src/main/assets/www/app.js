@@ -10,8 +10,11 @@ audioPlayer.preload = 'auto';
 
 // Автоматическое восстановление при сетевых ошибках или блокировках потока
 audioPlayer.addEventListener('error', async () => {
-    const track = currentQueue[currentIndex];
+    const rawSrc = audioPlayer.getAttribute('src');
+    if (!rawSrc) return;
+    const track = getActiveTrack();
     if (!track) return;
+    const errReqId = playbackRequestCounter;
     console.warn('[AudioPlayer] Playback error encountered on track:', track.title, audioPlayer.error);
     if (track._hadPlaybackError) {
         showSystemNotification('Ошибка трека', `Не удалось воспроизвести «${decodeHtml(track.title)}»`, 'warn');
@@ -19,11 +22,23 @@ audioPlayer.addEventListener('error', async () => {
     }
     track._hadPlaybackError = true;
 
-    // Резервная попытка через Audius
+    // Резервная попытка через локальный прокси на ПК
+    if (!isStandaloneApp && rawSrc && !rawSrc.includes('/api/stream-proxy')) {
+        try {
+            if (errReqId !== playbackRequestCounter) return;
+            audioPlayer.src = `/api/stream-proxy?url=${encodeURIComponent(rawSrc)}`;
+            await audioPlayer.play();
+            return;
+        } catch (_) {}
+    }
+
+    // Резервная попытка через Audius (если ещё играет этот же запрос)
     try {
+        if (errReqId !== playbackRequestCounter) return;
         const query = `${track.artist || ''} ${track.title || ''}`.trim();
         if (query) {
             const audMatches = await searchAudiusDirectly(query);
+            if (errReqId !== playbackRequestCounter) return;
             if (audMatches.length > 0 && audMatches[0].streamUrl) {
                 audioPlayer.src = audMatches[0].streamUrl;
                 await audioPlayer.play();
@@ -32,15 +47,6 @@ audioPlayer.addEventListener('error', async () => {
             }
         }
     } catch (_) {}
-
-    // Резервная попытка через локальный прокси на ПК
-    if (!isStandaloneApp && audioPlayer.src && !audioPlayer.src.includes('/api/stream-proxy')) {
-        try {
-            audioPlayer.src = `/api/stream-proxy?url=${encodeURIComponent(audioPlayer.src)}`;
-            await audioPlayer.play();
-            return;
-        } catch (_) {}
-    }
 });
 
 let currentHls = null;
@@ -69,8 +75,13 @@ function initAudioAnalyser() {
 const SVG_PLAY = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
 const SVG_PAUSE = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`;
 
+let discoverTracks = [];
 let currentQueue = [];
 let currentIndex = -1;
+let currentTrack = null;
+let playbackRequestCounter = 0;
+let activeLyricsRequestId = 0;
+let activeArtistRequestId = 0;
 let isPlaying = false;
 let isShuffle = false;
 let isRepeat = false;
@@ -78,6 +89,10 @@ let isAutoWave = true;
 let isFetchingRelated = false;
 let waveQueue = [];
 let lastRelatedTrackId = null;
+
+function getActiveTrack() {
+    return currentTrack || (currentIndex >= 0 ? currentQueue[currentIndex] : null) || null;
+}
 
 const defaultSettings = {
     wallpaper: 'aurora',
@@ -171,9 +186,9 @@ const I18N = {
         open_disclaimer_btn: 'Товарные знаки и Disclaimer',
         settings_updates: 'Обновления DodoMusic',
         settings_updates_hint: 'Проверка новых версий и релизов на GitHub',
-        version_chip: 'Версия v1.4',
+        version_chip: 'Версия v1.5',
         update_status_ok: 'Актуальная версия',
-        update_notes: 'DodoMusic v1.4 — Постоянное сохранение библиотеки и лайков на диск, скачивание MP3, системные уведомления Windows и медиа-клавиши.',
+        update_notes: 'DodoMusic v1.5 — Точный поиск текстов с проверкой исполнителя, защита очереди от сбоев при поиске и скачивание треков внутри приложения.',
         check_updates_btn: 'Проверить обновления',
         github_releases_btn: 'Релизы на GitHub',
         player_select_track: 'Выберите песню',
@@ -184,11 +199,12 @@ const I18N = {
         lyrics_now_playing: 'Сейчас играет',
         lyrics_not_playing: 'Не играет',
         lyrics_play_sync: 'Слушать с текстом',
+        lyrics_edit_query: 'Уточнить текст',
         lyrics_autoscroll_on: 'Автопрокрутка: ВКЛ',
         lyrics_autoscroll_off: 'Автопрокрутка: ВЫКЛ',
         lyrics_loading: 'Поиск синхронизированного текста песни...',
         lyrics_empty_title: 'Текст песни пока не найден',
-        lyrics_empty_desc: 'Для данного трека текст в базе пока отсутствует. Вы можете продолжать слушать песню дальше.',
+        lyrics_empty_desc: 'Для данного трека текст в базе пока отсутствует или исполнитель указан иначе. Нажмите «Уточнить текст», чтобы найти вручную.',
         lyrics_hint: '💡 Нажмите на любую строчку текста, чтобы перейти к этому моменту в песне',
         lyrics_btn_title: 'Текст песни и караоке (L)',
     },
@@ -265,9 +281,9 @@ const I18N = {
         open_disclaimer_btn: 'Trademarks & Disclaimer',
         settings_updates: 'DodoMusic Updates',
         settings_updates_hint: 'Check GitHub releases for new updates',
-        version_chip: 'Version v1.4',
+        version_chip: 'Version v1.5',
         update_status_ok: 'Up to date',
-        update_notes: 'DodoMusic v1.4 — Persistent local library on disk, MP3 downloads, Windows system notifications and media keys.',
+        update_notes: 'DodoMusic v1.5 — Strict artist-verified lyrics matching, isolated search vs. playback queue, and in-app track downloads.',
         check_updates_btn: 'Check for Updates',
         github_releases_btn: 'GitHub Releases',
         player_select_track: 'Select a track',
@@ -278,11 +294,12 @@ const I18N = {
         lyrics_now_playing: 'Now playing',
         lyrics_not_playing: 'Not playing',
         lyrics_play_sync: 'Play with Lyrics',
+        lyrics_edit_query: 'Refine Search',
         lyrics_autoscroll_on: 'Autoscroll: ON',
         lyrics_autoscroll_off: 'Autoscroll: OFF',
         lyrics_loading: 'Searching for synchronized lyrics...',
         lyrics_empty_title: 'Lyrics not found',
-        lyrics_empty_desc: 'No lyrics found for this track yet. You can continue listening.',
+        lyrics_empty_desc: 'No matching lyrics found for this artist and title yet. Click "Refine Search" above to search manually.',
         lyrics_hint: '💡 Click any line to jump to that moment in the song',
         lyrics_btn_title: 'Lyrics & Karaoke (L)',
     }
@@ -426,7 +443,7 @@ function updateSliderFill(slider) {
 }
 
 function syncPlayPauseUI() {
-    const activeTrack = currentQueue[currentIndex];
+    const activeTrack = getActiveTrack();
     const actuallyPlaying = Boolean(!audioPlayer.paused && !audioPlayer.ended && audioPlayer.readyState > 1);
     isPlaying = actuallyPlaying || (!audioPlayer.paused && audioPlayer.currentTime > 0);
 
@@ -474,6 +491,10 @@ function syncPlayPauseUI() {
     }
 }
 
+const savedVolume = localStorage.getItem('dodomusic_volume');
+if (savedVolume !== null && !isNaN(Number(savedVolume)) && volumeBar) {
+    volumeBar.value = savedVolume;
+}
 audioPlayer.volume = Number(volumeBar.value) / 100;
 updateSliderFill(volumeBar);
 updateSliderFill(seekBar);
@@ -492,7 +513,7 @@ audioPlayer.addEventListener('waiting', syncPlayPauseUI);
 
 audioPlayer.addEventListener('timeupdate', () => {
     const current = audioPlayer.currentTime || 0;
-    const track = currentQueue[currentIndex];
+    const track = getActiveTrack();
     const dur = (audioPlayer.duration && !isNaN(audioPlayer.duration) && audioPlayer.duration > 0)
         ? audioPlayer.duration
         : (track?.durationSeconds || 180);
@@ -577,7 +598,7 @@ function renderSearchHistoryDropdown(dropdownEl, listEl, inputEl, onSearch) {
                 <circle cx="12" cy="12" r="10"></circle>
                 <polyline points="12 6 12 12 16 14"></polyline>
             </svg>
-            <span class="search-history-text">${decodeHtml(q)}</span>
+            <span class="search-history-text">${escapeHtml(decodeHtml(q))}</span>
             <button type="button" class="search-history-delete-btn" title="Удалить из истории">✕</button>
         </div>
     `).join('');
@@ -618,7 +639,7 @@ function getUserTasteProfile() {
         'Мировые хиты': 0
     };
 
-    likedTracks.forEach(t => {
+    (favorites || []).forEach(t => {
         if (!t) return;
         const art = (t.artist || '').trim();
         if (art) artistScores[art] = (artistScores[art] || 0) + 3;
@@ -632,7 +653,7 @@ function getUserTasteProfile() {
         else genreScores['Поп / Тренды'] += 2;
     });
 
-    history.forEach(t => {
+    (historyList || []).forEach(t => {
         if (!t) return;
         const art = (t.artist || '').trim();
         if (art) artistScores[art] = (artistScores[art] || 0) + 1;
@@ -764,8 +785,12 @@ async function fetchTasteWaveForTrack(seedTrack) {
         }
 
         if (tasteTracks.length > 0) {
+            const active = getActiveTrack();
+            if (active && active.id !== seedTrack.id) return;
             waveQueue = tasteTracks;
+            currentTrack = seedTrack;
             currentQueue = [seedTrack].concat(tasteTracks);
+            currentIndex = 0;
             renderWaveQueueView();
             renderTasteAnalysisUI();
 
@@ -794,10 +819,7 @@ async function fetchTasteWaveForTrack(seedTrack) {
 let currentScClientId = '39AVoiZVrdvJEMFLH8T0c5WGshQaAPRJ';
 let lastScClientIdFetch = Date.now();
 const BACKUP_SC_CLIENT_IDS = [
-    '39AVoiZVrdvJEMFLH8T0c5WGshQaAPRJ',
-    'bJ52gOqXW3qJq9s1vG9j6H8F5z8D4w3q',
-    'iZIs9mchVcX5lhVR1HNuuVuehUsvwYtZ',
-    'cc9989a3f295b94fef2b49eb5e57b985'
+    '39AVoiZVrdvJEMFLH8T0c5WGshQaAPRJ'
 ];
 
 async function getLiveSoundCloudClientId() {
@@ -829,12 +851,12 @@ async function getLiveSoundCloudClientId() {
 }
 
 function cleanTrackTitleAndArtist(rawTitle, rawUser) {
-    let title = (rawTitle || 'Без названия').replace(/\.(mp3|wav|flac)$/i, '').trim();
-    let artist = rawUser || 'Неизвестный исполнитель';
+    let title = (rawTitle || 'Без названия').replace(/\.(mp3|wav|flac|m4a|ogg)$/i, '').trim();
+    let artist = (rawUser || 'Неизвестный исполнитель').trim();
 
     // Формат "Артист - Название" или "Артист — Название"
-    const match = title.match(/^(.+?)\s+[-—–]\s+(.+)$/);
-    if (match) {
+    const match = title.match(/^(.+?)\s+[-—–|]\s+(.+)$/);
+    if (match && match[1].trim().length >= 2 && match[2].trim().length >= 1) {
         artist = match[1].trim();
         title = match[2].trim();
     }
@@ -844,10 +866,12 @@ function cleanTrackTitleAndArtist(rawTitle, rawUser) {
 function mapSoundCloudTrack(t) {
     const transcodings = t.media?.transcodings || [];
     const prog = transcodings.find(x => x.format?.protocol === 'progressive');
-    const hls = transcodings.find(x => x.format?.protocol === 'hls');
-    const chosen = prog || hls || transcodings[0];
+    const aacHls = transcodings.find(x => x.format?.protocol === 'hls' && x.format?.mime_type?.includes('mp4a'));
+    const mpegHls = transcodings.find(x => x.format?.protocol === 'hls' && x.format?.mime_type?.includes('mpeg'));
+    const chosen = prog || aacHls || mpegHls || transcodings[0];
     const rawArtwork = t.artwork_url || t.user?.avatar_url || 'icon.png';
     const artwork = rawArtwork.replace('-large.', '-t500x500.');
+    const durationSec = Math.round((t.duration || 0) / 1000);
 
     const { artist, title } = cleanTrackTitleAndArtist(t.title, t.user?.username || t.user?.name);
 
@@ -857,9 +881,13 @@ function mapSoundCloudTrack(t) {
         source: 'soundcloud',
         title: title || 'Без названия',
         artist: artist || 'Неизвестный исполнитель',
-        duration: Math.round((t.duration || 0) / 1000),
+        duration: formatTime(durationSec),
+        durationSeconds: durationSec,
         thumbnail: artwork,
-        transcodingUrl: chosen ? chosen.url : null,
+        transcodingUrl: chosen ? chosen.url : '',
+        progressiveUrl: prog ? prog.url : '',
+        mpegHlsUrl: mpegHls ? mpegHls.url : '',
+        trackAuthorization: t.track_authorization || '',
         protocol: chosen && chosen.format?.protocol === 'hls' ? 'hls' : 'progressive',
         permalinkUrl: t.permalink_url || '#',
         genre: t.genre || '',
@@ -894,14 +922,10 @@ async function searchSoundCloudDirectly(query) {
     const wantsRemix = qLower.includes('remix') || qLower.includes('ремикс');
     const wantsSlowed = qLower.includes('slowed') || qLower.includes('bass');
 
-    const cids = [
+    const cids = [...new Set([
         currentScClientId,
-        '39AVoiZVrdvJEMFLH8T0c5WGshQaAPRJ',
-        'a3e059563d7fd3372b49b37f00a00bcf',
-        'iZIs9mchVcX5lhVR1EzGCcyTZpqbtsp4',
-        'b45b1aa10f1ac2941142580c10321315',
-        'fDoItMDFlkneyECshZRLYbuVaYM52x0J'
-    ].filter(Boolean);
+        '39AVoiZVrdvJEMFLH8T0c5WGshQaAPRJ'
+    ].filter(Boolean))];
 
     for (const cid of cids) {
         try {
@@ -968,21 +992,25 @@ async function searchAudiusDirectly(query) {
         const items = data?.data || [];
         return items
             .filter(t => t.id && !t.is_unlisted && (t.duration || 0) >= 30)
-            .map(t => ({
-                id: 'aud_' + t.id,
-                trackId: t.id,
-                source: 'audius',
-                title: t.title || 'Без названия',
-                artist: t.user?.name || 'Неизвестный исполнитель',
-                duration: Math.round(t.duration || 0),
-                thumbnail: t.artwork ? (t.artwork['480x480'] || t.artwork['150x150'] || 'icon.png') : 'icon.png',
-                streamUrl: 'https://discoveryprovider.audius.co/v1/tracks/' + t.id + '/stream?app_name=DODOMUSIC',
-                protocol: 'progressive',
-                permalinkUrl: 'https://audius.co' + (t.permalink || ''),
-                genre: t.genre || '',
-                likesCount: t.favorite_count || 0,
-                playbackCount: t.play_count || 0
-            }));
+            .map(t => {
+                const durSec = Math.round(t.duration || 0);
+                return {
+                    id: 'aud_' + t.id,
+                    trackId: t.id,
+                    source: 'audius',
+                    title: t.title || 'Без названия',
+                    artist: t.user?.name || 'Неизвестный исполнитель',
+                    duration: formatTime(durSec),
+                    durationSeconds: durSec,
+                    thumbnail: t.artwork ? (t.artwork['480x480'] || t.artwork['150x150'] || 'icon.png') : 'icon.png',
+                    streamUrl: 'https://discoveryprovider.audius.co/v1/tracks/' + t.id + '/stream?app_name=DODOMUSIC',
+                    protocol: 'progressive',
+                    permalinkUrl: 'https://audius.co' + (t.permalink || ''),
+                    genre: t.genre || '',
+                    likesCount: t.favorite_count || 0,
+                    playbackCount: t.play_count || 0
+                };
+            });
     } catch (e) {
         console.warn('[Direct Audius Search] Warn:', e.message);
         return [];
@@ -1019,22 +1047,30 @@ async function resolveStreamDirectly(track) {
             const found = await searchSoundCloudDirectly(`${track.artist || ''} ${track.title || ''}`.trim());
             if (found && found.length > 0 && found[0].transcodingUrl) {
                 track.transcodingUrl = found[0].transcodingUrl;
+                track.trackAuthorization = found[0].trackAuthorization || '';
                 track.protocol = found[0].protocol;
             }
         } catch (_) {}
     }
 
+    const buildTcUrl = (base, cid, auth) => {
+        const sep = base.includes('?') ? '&' : '?';
+        let u = `${base}${sep}client_id=${cid}`;
+        if (auth) u += `&track_authorization=${encodeURIComponent(auth)}`;
+        return u;
+    };
+
     if (track.transcodingUrl) {
         try {
             let cid = await getLiveSoundCloudClientId();
-            let transUrl = track.transcodingUrl + '?client_id=' + cid;
+            let transUrl = buildTcUrl(track.transcodingUrl, cid, track.trackAuthorization);
             let transData = null;
             try {
                 transData = await networkFetchJson(transUrl, 6000);
             } catch (_) {
                 lastScClientIdFetch = 0;
                 cid = await getLiveSoundCloudClientId();
-                transUrl = track.transcodingUrl + '?client_id=' + cid;
+                transUrl = buildTcUrl(track.transcodingUrl, cid, track.trackAuthorization);
                 transData = await networkFetchJson(transUrl, 6000);
             }
             if (transData && transData.url) {
@@ -1054,7 +1090,7 @@ async function resolveStreamDirectly(track) {
         if (matches.length > 0 && matches[0].transcodingUrl) {
             const best = matches[0];
             const cid = await getLiveSoundCloudClientId();
-            const res = await fetch(best.transcodingUrl + '?client_id=' + cid);
+            const res = await fetch(buildTcUrl(best.transcodingUrl, cid, best.trackAuthorization));
             if (res.ok) {
                 const data = await res.json();
                 if (data.url) {
@@ -1090,18 +1126,23 @@ async function resolveStreamDirectly(track) {
 
 async function searchMusic(rawQuery) {
     if (!rawQuery?.trim()) return;
-    let query = rawQuery.trim();
-    if (query === 'chart:top') query = 'Miyagi Macan Дора';
-    if (query === 'chart:russia') query = 'Русские хиты Miyagi';
+    const rawTrimmed = rawQuery.trim();
+    let directQuery = rawTrimmed;
+    if (directQuery === 'chart:top') directQuery = 'The Weeknd Travis Scott Dua Lipa';
+    if (directQuery === 'chart:russia') directQuery = 'Miyagi Macan Дора';
 
-    saveSearchHistoryQuery(query);
+    if (!rawTrimmed.startsWith('chart:')) {
+        saveSearchHistoryQuery(rawTrimmed);
+    }
     searchBtn.disabled = true;
     searchBtn.textContent = 'Поиск...';
-    resultsHeading.textContent = query;
+    resultsHeading.textContent = rawTrimmed.startsWith('chart:')
+        ? (rawTrimmed === 'chart:russia' ? 'Главный хит-парад' : 'Мировой ТОП хитов')
+        : rawTrimmed;
     resultsCount.textContent = 'Поиск треков...';
 
     let foundTracks = null;
-    let cleanQuery = query;
+    let cleanQuery = resultsHeading.textContent;
 
     // 1. Попытка через локальный сервер (если приложение на ПК с локальным сервером)
     if (!isStandaloneApp) {
@@ -1109,8 +1150,8 @@ async function searchMusic(rawQuery) {
             const res = await fetch('/api/search-music', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query }),
-                signal: AbortSignal.timeout(5000)
+                body: JSON.stringify({ query: rawTrimmed }),
+                signal: AbortSignal.timeout(5500)
             });
             if (res.ok) {
                 const data = await res.json();
@@ -1125,7 +1166,7 @@ async function searchMusic(rawQuery) {
     // 2. Fallback: Прямой поиск в SoundCloud + Audius
     if (!foundTracks || foundTracks.length === 0) {
         try {
-            foundTracks = await searchMusicDirectly(query);
+            foundTracks = await searchMusicDirectly(directQuery);
         } catch (err) {
             console.warn('[Direct search error]', err);
         }
@@ -1133,7 +1174,7 @@ async function searchMusic(rawQuery) {
 
     // 3. Если ничего не найдено по многословному запросу, пробуем по ключевому слову
     if (!foundTracks || foundTracks.length === 0) {
-        const words = query.split(/\s+/);
+        const words = directQuery.split(/\s+/);
         if (words.length > 1) {
             try {
                 foundTracks = await searchMusicDirectly(words[0]);
@@ -1141,10 +1182,11 @@ async function searchMusic(rawQuery) {
         }
     }
 
-    currentQueue = foundTracks || [];
+    // ВАЖНО: Не перезаписываем currentQueue при поиске! Играющая очередь сохраняется до клика по треку.
+    discoverTracks = foundTracks || [];
     resultsHeading.textContent = cleanQuery;
-    resultsCount.textContent = currentQueue.length > 0 ? `Найдено: ${currentQueue.length} (онлайн)` : 'Песни не найдены';
-    renderTracksGrid(tracksContainer, currentQueue);
+    resultsCount.textContent = discoverTracks.length > 0 ? `Найдено: ${discoverTracks.length} (онлайн)` : 'Песни не найдены';
+    renderTracksGrid(tracksContainer, discoverTracks);
 
     searchBtn.disabled = false;
     searchBtn.textContent = 'Найти';
@@ -1164,7 +1206,7 @@ function renderTracksGrid(container, list, options = {}) {
         return;
     }
 
-    const activeTrack = currentQueue[currentIndex];
+    const activeTrack = getActiveTrack();
 
     list.forEach((track, idx) => {
         const card = document.createElement('div');
@@ -1174,6 +1216,9 @@ function renderTracksGrid(container, list, options = {}) {
 
         const cleanTitle = decodeHtml(track.title);
         const cleanArtist = decodeHtml(track.artist);
+        const safeTitleAttr = escapeHtml(cleanTitle);
+        const safeArtistAttr = escapeHtml(cleanArtist);
+        const safeThumb = escapeHtml(track.thumbnail || 'icon.png');
         const durationText = track.duration || '';
         const isChart = track.source === 'chart' || track.isChart;
         const platformBadge = isChart
@@ -1191,9 +1236,9 @@ function renderTracksGrid(container, list, options = {}) {
 
         card.innerHTML = `
             <div class="cover-wrapper">
-                <img src="${track.thumbnail}" alt="${cleanTitle}" loading="lazy" draggable="false" />
+                <img src="${safeThumb}" alt="${safeTitleAttr}" onerror="this.onerror=null;this.src='icon.png';" loading="lazy" draggable="false" />
                 ${platformBadge}
-                ${durationText ? `<span class="duration-badge">${durationText}</span>` : ''}
+                ${durationText ? `<span class="duration-badge">${escapeHtml(durationText)}</span>` : ''}
                 <div class="play-overlay">${isCurrent && isPlaying ? SVG_PAUSE : SVG_PLAY}</div>
                 ${removeBtnHtml}
                 <button class="card-lyrics-btn" title="Текст песни и караоке">
@@ -1215,8 +1260,8 @@ function renderTracksGrid(container, list, options = {}) {
                     </svg>
                 </button>
             </div>
-            <div class="track-title" title="${cleanTitle}">${cleanTitle}</div>
-            <div class="track-channel" title="${cleanArtist}">${cleanArtist}</div>
+            <div class="track-title" title="${safeTitleAttr}">${safeTitleAttr}</div>
+            <div class="track-channel" title="${safeArtistAttr}">${safeArtistAttr}</div>
         `;
 
         const likeBtn = card.querySelector('.card-like-btn');
@@ -1260,7 +1305,8 @@ function renderTracksGrid(container, list, options = {}) {
         }
 
         card.addEventListener('click', () => {
-            if (isCurrent) {
+            const active = getActiveTrack();
+            if (active && active.id === track.id) {
                 if (!audioPlayer.paused) {
                     audioPlayer.pause();
                 } else {
@@ -1269,7 +1315,6 @@ function renderTracksGrid(container, list, options = {}) {
                 return;
             }
             if (options.isWaveView) {
-                // В очереди волны - переключаемся на этот трек и оставляем следующие в волне
                 const foundIndex = currentQueue.findIndex(t => t.id === track.id);
                 if (foundIndex >= 0) {
                     playTrackAtIndex(foundIndex);
@@ -1278,7 +1323,7 @@ function renderTracksGrid(container, list, options = {}) {
                     playTrackAtIndex(currentIndex + 1);
                 }
             } else {
-                currentQueue = list;
+                currentQueue = list.slice();
                 playTrackAtIndex(idx);
             }
         });
@@ -1435,8 +1480,22 @@ async function playTrackAtIndex(index) {
     if (index < 0 || index >= currentQueue.length) return;
     initAudioAnalyser();
 
+    const reqId = ++playbackRequestCounter;
     currentIndex = index;
-    const track = currentQueue[currentIndex];
+    currentTrack = currentQueue[currentIndex];
+    const track = currentTrack;
+    delete track._hadPlaybackError;
+
+    // Немедленно останавливаем предыдущее воспроизведение до загрузки нового потока
+    if (currentHls) {
+        currentHls.destroy();
+        currentHls = null;
+    }
+    try {
+        audioPlayer.pause();
+        audioPlayer.removeAttribute('src');
+        audioPlayer.load();
+    } catch (_) {}
 
     const cleanTitle = decodeHtml(track.title);
     const cleanArtist = decodeHtml(track.artist);
@@ -1447,6 +1506,7 @@ async function playTrackAtIndex(index) {
     currentTimeEl.textContent = '0:00';
     durationTimeEl.textContent = track.duration || '3:00';
     seekBar.value = '0';
+    updateSliderFill(seekBar);
 
     updateLikeButtonState(track.id);
     addToHistory(track);
@@ -1491,12 +1551,6 @@ async function playTrackAtIndex(index) {
         fetchRelatedTracksForCurrent(track);
     }
 
-    // Останавливаем предыдущий поток HLS
-    if (currentHls) {
-        currentHls.destroy();
-        currentHls = null;
-    }
-
     try {
         // Разрешаем прямую ссылку на полный аудио-поток
         const params = new URLSearchParams({
@@ -1504,6 +1558,9 @@ async function playTrackAtIndex(index) {
             trackId: track.id,
             source: track.source || (track.isChart ? 'chart' : 'soundcloud'),
             transcodingUrl: track.transcodingUrl || '',
+            progressiveUrl: track.progressiveUrl || '',
+            mpegHlsUrl: track.mpegHlsUrl || '',
+            trackAuthorization: track.trackAuthorization || '',
             streamUrl: track.streamUrl || '',
             previewUrl: track.previewUrl || track.audioPreview || '',
             artist: track.artist || '',
@@ -1515,7 +1572,8 @@ async function playTrackAtIndex(index) {
 
         if (!isStandaloneApp) {
             try {
-                const res = await fetch(`/api/resolve-stream?${params.toString()}`, { signal: AbortSignal.timeout(5000) });
+                const res = await fetch(`/api/resolve-stream?${params.toString()}`, { signal: AbortSignal.timeout(6500) });
+                if (reqId !== playbackRequestCounter) return;
                 if (res.ok) {
                     const data = await res.json();
                     fullStreamUrl = data.streamUrl;
@@ -1524,17 +1582,23 @@ async function playTrackAtIndex(index) {
             } catch (_) {}
         }
 
+        if (reqId !== playbackRequestCounter) return;
+
         if (!fullStreamUrl) {
             try {
                 const directRes = await resolveStreamDirectly(track);
+                if (reqId !== playbackRequestCounter) return;
                 fullStreamUrl = directRes.streamUrl;
                 streamProtocol = directRes.protocol;
             } catch (err) {
+                if (reqId !== playbackRequestCounter) return;
                 console.error('Ошибка прямого разрешения потока:', err);
                 showSystemNotification('Ошибка воспроизведения', 'Не удалось загрузить аудиопоток', 'warn');
                 return;
             }
         }
+
+        if (reqId !== playbackRequestCounter || !fullStreamUrl) return;
 
         if (streamProtocol === 'hls' && window.Hls && Hls.isSupported()) {
             currentHls = new Hls({
@@ -1544,9 +1608,11 @@ async function playTrackAtIndex(index) {
             currentHls.loadSource(fullStreamUrl);
             currentHls.attachMedia(audioPlayer);
             currentHls.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (reqId !== playbackRequestCounter) return;
                 audioPlayer.play().catch(() => {});
             });
             currentHls.on(Hls.Events.ERROR, (event, errData) => {
+                if (reqId !== playbackRequestCounter) return;
                 if (errData.fatal) {
                     console.warn('HLS fatal error:', errData.type);
                     if (errData.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -1561,7 +1627,9 @@ async function playTrackAtIndex(index) {
             audioPlayer.play().catch(() => {});
         }
     } catch (err) {
-        console.error('Ошибка воспроизведения полного трека:', err);
+        if (reqId === playbackRequestCounter) {
+            console.error('Ошибка воспроизведения полного трека:', err);
+        }
     }
 }
 
@@ -1569,24 +1637,23 @@ function playNext() {
     if (!currentQueue.length) return;
 
     if (isShuffle) {
-        // Умный рандом: если играем вперемешку и осталось мало треков, пополняем очередь
         if (currentIndex >= currentQueue.length - 4 && isAutoWave) {
-            fetchTasteWaveForTrack(currentQueue[currentIndex]);
+            fetchTasteWaveForTrack(getActiveTrack());
         }
-        const nextIdx = Math.floor(Math.random() * currentQueue.length);
+        let nextIdx = 0;
+        if (currentQueue.length > 1) {
+            do {
+                nextIdx = Math.floor(Math.random() * currentQueue.length);
+            } while (nextIdx === currentIndex);
+        }
         playTrackAtIndex(nextIdx);
     } else {
         const nextIdx = currentIndex + 1;
         if (nextIdx < currentQueue.length) {
-            // Если подходим к концу очереди, заранее подгружаем следующую пачку треков по вкусу
-            if (nextIdx >= currentQueue.length - 3 && isAutoWave) {
-                fetchTasteWaveForTrack(currentQueue[nextIdx]);
-            }
             playTrackAtIndex(nextIdx);
         } else if (isAutoWave) {
-            // Достигли последнего трека, запрашиваем ещё и бесшовно продолжаем
-            const currentTrack = currentQueue[currentIndex];
-            fetchTasteWaveForTrack(currentTrack).then(() => {
+            const active = getActiveTrack();
+            fetchTasteWaveForTrack(active).then(() => {
                 if (currentIndex + 1 < currentQueue.length) {
                     playTrackAtIndex(currentIndex + 1);
                 } else {
@@ -1671,7 +1738,7 @@ async function loadLibraryFromDisk() {
     renderTracksGrid(favoritesContainer, favorites);
     renderTracksGrid(historyContainer, historyList);
     updateAllCardsLikeUI();
-    const current = currentQueue[currentIndex];
+    const current = getActiveTrack();
     if (current) updateLikeButtonState(current.id);
 }
 
@@ -1702,28 +1769,37 @@ function addToHistory(track) {
 }
 
 likeCurrentBtn?.addEventListener('click', () => {
-    const current = currentQueue[currentIndex];
+    const current = getActiveTrack();
     if (!current) return;
     toggleTrackLike(current);
 });
 
-// Скачивание текущего трека
+// Скачивание текущего трека (внутри приложения, без открытия внешнего браузера)
 const downloadCurrentBtn = document.getElementById('downloadCurrentBtn');
 if (downloadCurrentBtn) {
     downloadCurrentBtn.addEventListener('click', () => {
-        const track = currentQueue[currentIndex];
+        const track = getActiveTrack();
         if (!track) return;
         showSystemNotification('Скачивание трека', `Загрузка «${decodeHtml(track.title)}»...`, 'music', track.thumbnail || 'icon.png');
         const params = new URLSearchParams({
             trackId: track.id,
             source: track.source || (track.isChart ? 'chart' : 'soundcloud'),
             transcodingUrl: track.transcodingUrl || '',
+            progressiveUrl: track.progressiveUrl || '',
+            mpegHlsUrl: track.mpegHlsUrl || '',
+            trackAuthorization: track.trackAuthorization || '',
             streamUrl: track.streamUrl || '',
             previewUrl: track.previewUrl || track.audioPreview || '',
-            title: track.title,
-            artist: track.artist,
+            title: track.title || 'Track',
+            artist: track.artist || 'DodoMusic',
         });
-        window.open(`/api/download-track?${params.toString()}`, '_blank');
+        const downloadUrl = `/api/download-track?${params.toString()}`;
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = `${track.artist || 'DodoMusic'} - ${track.title || 'Track'}.mp3`.replace(/[\\/:*?"<>|]/g, '_');
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
     });
 }
 
@@ -1765,7 +1841,7 @@ if (autoWaveBtn) {
         autoWaveBtn.classList.toggle('active', isAutoWave);
         if (isAutoWave) {
             if (smartWaveBanner) smartWaveBanner.style.display = 'inline-flex';
-            const activeTrack = currentQueue[currentIndex];
+            const activeTrack = getActiveTrack();
             if (activeTrack) fetchRelatedTracksForCurrent(activeTrack, true);
         } else {
             if (smartWaveBanner) smartWaveBanner.style.display = 'none';
@@ -1775,15 +1851,17 @@ if (autoWaveBtn) {
 
 if (startSmartWaveBtn) {
     startSmartWaveBtn.addEventListener('click', () => {
-        const activeTrack = currentQueue[currentIndex];
+        const activeTrack = getActiveTrack();
         if (activeTrack) {
-            if (!isPlaying) audioPlayer.play();
+            if (!isPlaying) audioPlayer.play().catch(() => {});
             fetchRelatedTracksForCurrent(activeTrack, true);
         } else if (favorites.length > 0) {
             startSmartWaveFromTrack(favorites[0]);
+        } else if (discoverTracks.length > 0) {
+            startSmartWaveFromTrack(discoverTracks[0]);
         } else {
             searchMusic('девочка в каре').then(() => {
-                if (currentQueue[0]) startSmartWaveFromTrack(currentQueue[0]);
+                if (discoverTracks[0]) startSmartWaveFromTrack(discoverTracks[0]);
             });
         }
     });
@@ -1791,7 +1869,7 @@ if (startSmartWaveBtn) {
 
 if (refreshWaveBtn) {
     refreshWaveBtn.addEventListener('click', () => {
-        const activeTrack = currentQueue[currentIndex];
+        const activeTrack = getActiveTrack();
         if (activeTrack) {
             fetchRelatedTracksForCurrent(activeTrack, true);
         }
@@ -1802,8 +1880,9 @@ const clearWaveBtn = document.getElementById('clearWaveBtn');
 if (clearWaveBtn) {
     clearWaveBtn.addEventListener('click', () => {
         waveQueue = [];
-        if (currentIndex >= 0 && currentIndex < currentQueue.length) {
-            currentQueue = [currentQueue[currentIndex]];
+        const active = getActiveTrack();
+        if (active) {
+            currentQueue = [active];
             currentIndex = 0;
         } else {
             currentQueue = [];
@@ -1992,7 +2071,7 @@ repeatBtn.addEventListener('click', () => {
 });
 
 seekBar.addEventListener('input', () => {
-    const track = currentQueue[currentIndex];
+    const track = getActiveTrack();
     const dur = (audioPlayer.duration && !isNaN(audioPlayer.duration) && audioPlayer.duration > 0)
         ? audioPlayer.duration
         : (track?.durationSeconds || 180);
@@ -2007,6 +2086,7 @@ volumeBar.addEventListener('input', () => {
     const vol = Number(volumeBar.value) / 100;
     audioPlayer.volume = vol;
     audioPlayer.muted = vol === 0;
+    localStorage.setItem('dodomusic_volume', String(volumeBar.value));
     updateSliderFill(volumeBar);
 });
 
@@ -2019,7 +2099,7 @@ muteBtn.addEventListener('click', () => {
 if (playerArtist) {
     playerArtist.addEventListener('click', (e) => {
         e.stopPropagation();
-        const track = currentQueue[currentIndex];
+        const track = getActiveTrack();
         if (track?.artist) {
             closeLyricsModal();
             openArtistPage(track.artist);
@@ -2030,7 +2110,7 @@ if (playerArtist) {
 // Открыть трек на SoundCloud / Audius
 if (openSourceBtn) {
     openSourceBtn.addEventListener('click', () => {
-        const track = currentQueue[currentIndex];
+        const track = getActiveTrack();
         if (track?.permalinkUrl) {
             window.open(track.permalinkUrl, '_blank');
         } else if (track) {
@@ -2051,6 +2131,7 @@ window.addEventListener('scroll', () => {
  */
 async function openArtistPage(artistName) {
     if (!artistName) return;
+    const reqId = ++activeArtistRequestId;
     const cleanName = decodeHtml(artistName).trim();
 
     // Переключаем вкладку на страницу артиста
@@ -2059,15 +2140,37 @@ async function openArtistPage(artistName) {
     tabArtist?.classList.add('active');
     if (mainContent) mainContent.scrollTop = 0;
 
-    // Начальное состояние
+    // Сбрасываем предыдущие данные артиста сразу
     if (artistNameTitle) artistNameTitle.textContent = cleanName;
+    if (artistAvatar) artistAvatar.src = 'icon.png';
+    if (artistHeroBg) artistHeroBg.src = 'icon.png';
     if (artistStats) artistStats.textContent = 'Загрузка профиля и композиций...';
+    if (artistTracksCount) artistTracksCount.textContent = '...';
     if (artistTracksContainer) artistTracksContainer.innerHTML = '<div class="empty-state">Загружаем композиции...</div>';
 
     try {
-        const res = await fetch(`/api/artist-profile?artist=${encodeURIComponent(cleanName)}`);
-        if (!res.ok) throw new Error('Ошибка загрузки данных артиста');
-        const data = await res.json();
+        let data = null;
+        if (!isStandaloneApp) {
+            try {
+                const res = await fetch(`/api/artist-profile?artist=${encodeURIComponent(cleanName)}`, { signal: AbortSignal.timeout(7000) });
+                if (res.ok) data = await res.json();
+            } catch (_) {}
+        }
+        if (reqId !== activeArtistRequestId) return;
+
+        if (!data || !data.tracks || data.tracks.length === 0) {
+            const directTracks = await searchMusicDirectly(cleanName);
+            if (reqId !== activeArtistRequestId) return;
+            data = {
+                artist: {
+                    name: cleanName,
+                    avatar: directTracks[0]?.thumbnail || 'icon.png',
+                    permalinkUrl: `https://soundcloud.com/search/people?q=${encodeURIComponent(cleanName)}`,
+                    followersCount: 0,
+                },
+                tracks: directTracks,
+            };
+        }
 
         const artist = data.artist || { name: cleanName, avatar: 'icon.png', permalinkUrl: '#' };
         if (artistNameTitle) artistNameTitle.textContent = artist.name;
@@ -2081,16 +2184,16 @@ async function openArtistPage(artistName) {
             artistSourceLink.href = artist.permalinkUrl || `https://soundcloud.com/search/people?q=${encodeURIComponent(cleanName)}`;
         }
 
-        // Все треки артиста
+        const artistTracks = data.tracks || [];
         if (artistTracksCount) {
-            artistTracksCount.textContent = `${data.tracks?.length || 0} композиций`;
+            artistTracksCount.textContent = `${artistTracks.length} композиций`;
         }
-        renderTracksGrid(artistTracksContainer, data.tracks || []);
+        renderTracksGrid(artistTracksContainer, artistTracks);
 
         if (playAllArtistBtn) {
             playAllArtistBtn.onclick = () => {
-                if (data.tracks && data.tracks.length > 0) {
-                    currentQueue = data.tracks;
+                if (artistTracks.length > 0) {
+                    currentQueue = artistTracks.slice();
                     playTrackAtIndex(0);
                 }
             };
@@ -2098,14 +2201,16 @@ async function openArtistPage(artistName) {
 
         if (radioArtistBtn) {
             radioArtistBtn.onclick = () => {
-                if (data.tracks && data.tracks.length > 0) {
-                    startSmartWaveFromTrack(data.tracks[0]);
+                if (artistTracks.length > 0) {
+                    startSmartWaveFromTrack(artistTracks[0]);
                 }
             };
         }
     } catch (err) {
-        console.error('Artist profile error:', err);
-        if (artistStats) artistStats.textContent = 'Официальная страница артиста';
+        if (reqId === activeArtistRequestId) {
+            console.error('Artist profile error:', err);
+            if (artistStats) artistStats.textContent = 'Официальная страница артиста';
+        }
     }
 }
 
@@ -2228,7 +2333,7 @@ document.querySelectorAll('.lang-btn').forEach((btn) => {
         userSettings.language = lang;
         applyLanguage(lang);
         localStorage.setItem('dodomusic_settings', JSON.stringify(userSettings));
-        syncLibraryToDisk();
+        saveLibraryToDisk();
     });
 });
 
@@ -2533,7 +2638,7 @@ if ('mediaSession' in navigator) {
     } catch (_) {}
 }
 
-// СИСТЕМА ОБНОВЛЕНИЙ ЧЕРЕЗ GITHUB (v1.4)
+// СИСТЕМА ОБНОВЛЕНИЙ ЧЕРЕЗ GITHUB (v1.5)
 async function checkAppUpdates(manual = false) {
     const updateBadgeBtn = document.getElementById('updateBadgeBtn');
     const updateBadgeLabel = document.getElementById('updateBadgeLabel');
@@ -2582,7 +2687,7 @@ async function checkAppUpdates(manual = false) {
         } else {
             if (updateBadgeBtn) {
                 updateBadgeBtn.classList.remove('has-update');
-                updateBadgeBtn.title = 'У вас установлена последняя версия v1.4';
+                updateBadgeBtn.title = 'У вас установлена последняя версия v1.5';
             }
             if (updateBadgeLabel) {
                 updateBadgeLabel.textContent = 'Актуально';
@@ -2590,14 +2695,14 @@ async function checkAppUpdates(manual = false) {
             }
             if (updateStatusText) {
                 updateStatusText.className = 'update-status-badge ok';
-                updateStatusText.textContent = 'Установлена последняя версия v1.4';
+                updateStatusText.textContent = 'Установлена последняя версия v1.5';
             }
             if (updateNotesText) {
-                updateNotesText.textContent = 'DodoMusic v1.4 — Постоянное сохранение библиотеки на диск, скачивание MP3, сердечки лайков на карточках и системная интеграция Windows.';
+                updateNotesText.textContent = 'DodoMusic v1.5 — Точный поиск текстов с проверкой исполнителя, защита очереди от сбоев при поиске и скачивание треков внутри приложения.';
             }
             if (manual) {
                 showSystemNotification(
-                    'DodoMusic v1.4',
+                    'DodoMusic v1.5',
                     'У вас установлена самая актуальная версия! Обновлений не требуется.',
                     'success'
                 );
@@ -2606,7 +2711,7 @@ async function checkAppUpdates(manual = false) {
     } catch (err) {
         console.warn('Update check error:', err);
         if (updateStatusText) {
-            updateStatusText.textContent = 'v1.4 (Офлайн)';
+            updateStatusText.textContent = 'v1.5 (Офлайн)';
         }
         if (manual) {
             showSystemNotification(
@@ -2694,9 +2799,9 @@ async function loadHomeFeed() {
     resultsCount.textContent = 'Загрузка рекомендаций...';
 
     // Мгновенно отображаем базовые популярные треки, чтобы экран не был пустым
-    if (!currentQueue || currentQueue.length === 0) {
-        currentQueue = FALLBACK_POPULAR_TRACKS;
-        renderTracksGrid(tracksContainer, FALLBACK_POPULAR_TRACKS);
+    if (!discoverTracks || discoverTracks.length === 0) {
+        discoverTracks = FALLBACK_POPULAR_TRACKS.slice();
+        renderTracksGrid(tracksContainer, discoverTracks);
     }
 
     let tracks = null;
@@ -2724,15 +2829,15 @@ async function loadHomeFeed() {
     }
 
     if (tracks && tracks.length > 0) {
-        currentQueue = tracks;
-        renderTracksGrid(tracksContainer, tracks);
+        discoverTracks = tracks;
+        renderTracksGrid(tracksContainer, discoverTracks);
         resultsHeading.textContent = 'Популярные треки';
-        resultsCount.textContent = `Треков: ${tracks.length} (онлайн)`;
+        resultsCount.textContent = `Треков: ${discoverTracks.length} (онлайн)`;
     } else {
-        currentQueue = FALLBACK_POPULAR_TRACKS;
-        renderTracksGrid(tracksContainer, FALLBACK_POPULAR_TRACKS);
+        discoverTracks = FALLBACK_POPULAR_TRACKS.slice();
+        renderTracksGrid(tracksContainer, discoverTracks);
         resultsHeading.textContent = 'Популярные треки';
-        resultsCount.textContent = `Треков: ${FALLBACK_POPULAR_TRACKS.length} (онлайн)`;
+        resultsCount.textContent = `Треков: ${discoverTracks.length} (онлайн)`;
     }
 }
 
@@ -2749,8 +2854,15 @@ const lyricsAmbientGlow = document.getElementById('lyricsAmbientGlow');
 const lyricsTrackCover = document.getElementById('lyricsTrackCover');
 const lyricsTrackTitle = document.getElementById('lyricsTrackTitle');
 const lyricsTrackArtist = document.getElementById('lyricsTrackArtist');
+const lyricsMatchedMeta = document.getElementById('lyricsMatchedMeta');
 const lyricsStatusBadge = document.getElementById('lyricsStatusBadge');
 const lyricsStatusBadgeText = document.getElementById('lyricsStatusBadgeText');
+const lyricsEditQueryBtn = document.getElementById('lyricsEditQueryBtn');
+const lyricsEditQueryText = document.getElementById('lyricsEditQueryText');
+const lyricsManualSearchRow = document.getElementById('lyricsManualSearchRow');
+const lyricsQueryArtist = document.getElementById('lyricsQueryArtist');
+const lyricsQueryTitle = document.getElementById('lyricsQueryTitle');
+const lyricsManualSearchBtn = document.getElementById('lyricsManualSearchBtn');
 const lyricsPlaySyncBtn = document.getElementById('lyricsPlaySyncBtn');
 const lyricsPlaySyncText = document.getElementById('lyricsPlaySyncText');
 const lyricsAutoscrollToggle = document.getElementById('lyricsAutoscrollToggle');
@@ -2815,82 +2927,257 @@ function parseClientLrc(lrcString) {
     return parsed;
 }
 
-async function fetchLrclibDirectly(rawTitle = '', rawArtist = '', duration = 0) {
-    const cleanTitle = (rawTitle || '')
-        .replace(/\(.*?\)/g, '')
-        .replace(/\[.*?\]/g, '')
-        .replace(/feat\..*$/i, '')
-        .replace(/ft\..*$/i, '')
+function translitClientCyrToLat(str) {
+    const map = {
+        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e', 'ж': 'zh', 'з': 'z',
+        'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r',
+        'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+        'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
+    };
+    return (str || '').toLowerCase().replace(/[а-яё]/g, (ch) => map[ch] ?? ch);
+}
+
+function normalizeClientLyricsText(str) {
+    return (str || '')
+        .toLowerCase()
+        .replace(/ё/g, 'е')
+        .replace(/\(.*?\)|\[.*?\]|\{.*?\}/g, ' ')
+        .replace(/\b(feat|ft|prod|official|video|audio|lyric|lyrics|clip|remix|slowed|reverb|speed\s*up|bass\s*boosted|nightcore|instrumental|karaoke|клип|премьера|текст|ремикс|минус)\b\.?/gi, ' ')
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .replace(/\s+/g, ' ')
         .trim();
-    const cleanArtist = (rawArtist || '')
-        .replace(/\(.*?\)/g, '')
-        .replace(/feat\..*$/i, '')
-        .replace(/ft\..*$/i, '')
+}
+
+function extractClientLyricsMeta(rawTitle = '', rawArtist = '') {
+    let title = (rawTitle || '').replace(/\.(mp3|wav|flac|m4a|ogg)$/i, '').trim();
+    let artist = (rawArtist || '').trim();
+    const genericArtists = new Set(['исполнитель', 'неизвестный исполнитель', 'unknown', 'unknown artist', 'dodomusic', 'soundcloud', 'soundcloud artist', 'audius artist', 'chart artist', '']);
+    const isGenericArtist = genericArtists.has(artist.toLowerCase());
+
+    const dashMatch = title.match(/^(.+?)\s+[-—–|]\s+(.+)$/);
+    if (dashMatch && isGenericArtist) {
+        const left = dashMatch[1].trim();
+        const right = dashMatch[2].trim();
+        if (left.length >= 2 && right.length >= 1) {
+            artist = left;
+            title = right;
+        }
+    }
+
+    const featMatches = [];
+    const featRegex = /(?:feat\.?|ft\.?)\s+([^()[\]]+)/gi;
+    let fm;
+    while ((fm = featRegex.exec(title)) !== null) {
+        featMatches.push(fm[1].trim());
+    }
+
+    const cleanTitle = title
+        .replace(/\(.*?\)/g, ' ')
+        .replace(/\[.*?\]/g, ' ')
+        .replace(/\s+(?:feat|ft)\.?\s+.*$/i, '')
+        .replace(/\s+/g, ' ')
+        .trim() || title;
+
+    const cleanArtist = (genericArtists.has(artist.toLowerCase()) ? '' : artist)
+        .replace(/\(.*?\)/g, ' ')
+        .replace(/\[.*?\]/g, ' ')
+        .replace(/\s+(?:feat|ft)\.?\s+.*$/i, '')
+        .replace(/\s+/g, ' ')
         .trim();
 
-    // 1. Точный запрос /api/get
-    if (cleanTitle && cleanArtist) {
-        try {
-            let getUrl = `https://lrclib.net/api/get?track_name=${encodeURIComponent(cleanTitle)}&artist_name=${encodeURIComponent(cleanArtist)}`;
-            if (duration > 0) getUrl += `&duration=${Math.round(duration)}`;
-            const item = await networkFetchJson(getUrl, 5000);
-            if (item && item.syncedLyrics) {
-                return {
-                    found: true,
-                    synced: true,
-                    lines: parseClientLrc(item.syncedLyrics),
-                    plainLyrics: item.plainLyrics || '',
-                    trackName: item.name,
-                    artistName: item.artistName
-                };
-            } else if (item && item.plainLyrics) {
-                return {
-                    found: true,
-                    synced: false,
-                    lines: [],
-                    plainLyrics: item.plainLyrics,
-                    trackName: item.name,
-                    artistName: item.artistName
-                };
+    return {
+        cleanTitle,
+        cleanArtist,
+        combinedArtistRaw: [cleanArtist, ...featMatches].filter(Boolean).join(', '),
+        hasReliableArtist: Boolean(cleanArtist && !genericArtists.has(cleanArtist.toLowerCase()))
+    };
+}
+
+function buildClientArtistTokens(artistStr) {
+    const stop = new Set(['the', 'and', 'feat', 'ft', 'official', 'music', 'channel', 'prod', 'records', 'topic', 'vevo', 'dj', 'mc', 'x', 'и']);
+    const normFull = normalizeClientLyricsText(artistStr);
+    const parts = (artistStr || '')
+        .toLowerCase()
+        .replace(/ё/g, 'е')
+        .split(/\s*(?:,|&|feat\.?|ft\.?|vs\.?|×|\bx\b|\bи\b|\band\b|\/|\|)\s*/i)
+        .map((p) => normalizeClientLyricsText(p))
+        .filter((p) => p && p.length >= 2);
+    const words = [];
+    for (const w of normFull.split(' ')) {
+        if (w.length >= 2 && !stop.has(w)) {
+            words.push(w);
+            const lat = translitClientCyrToLat(w);
+            if (lat && lat !== w && lat.length >= 2) words.push(lat);
+        }
+    }
+    return { full: normFull, fullLat: translitClientCyrToLat(normFull), parts: [...new Set(parts)], words: [...new Set(words)] };
+}
+
+function scoreClientLyricsCandidate(item, meta, duration = 0) {
+    if (!item || (!item.syncedLyrics && !item.plainLyrics)) return -1;
+    const candTitleNorm = normalizeClientLyricsText(item.trackName || item.name || '');
+    const targetTitleNorm = normalizeClientLyricsText(meta.cleanTitle);
+    if (!candTitleNorm || !targetTitleNorm) return -1;
+
+    let titleScore = 0;
+    const tWords = targetTitleNorm.split(' ').filter(Boolean);
+    const cWords = candTitleNorm.split(' ').filter(Boolean);
+    const cSet = new Set([...cWords, ...cWords.map(translitClientCyrToLat)]);
+
+    if (candTitleNorm === targetTitleNorm || translitClientCyrToLat(candTitleNorm) === translitClientCyrToLat(targetTitleNorm)) {
+        titleScore = 100;
+    } else {
+        let hits = 0;
+        for (const w of tWords) {
+            if (cSet.has(w) || cSet.has(translitClientCyrToLat(w))) hits++;
+        }
+        const coverage = tWords.length > 0 ? hits / tWords.length : 0;
+        if (coverage < 0.65) return -1;
+        titleScore = Math.round(coverage * 75);
+        const extraRatio = Math.max(0, cWords.length - tWords.length) / Math.max(1, cWords.length);
+        titleScore -= Math.round(extraRatio * 20);
+    }
+
+    const targetArt = buildClientArtistTokens(meta.combinedArtistRaw || meta.cleanArtist);
+    const candArt = buildClientArtistTokens(item.artistName || '');
+    let artistScore = 0;
+
+    if (meta.hasReliableArtist && targetArt.words.length > 0) {
+        if (!candArt.full) return -1;
+        if (candArt.full === targetArt.full || candArt.fullLat === targetArt.fullLat) {
+            artistScore = 130;
+        } else {
+            const partHit = targetArt.parts.some((tp) => {
+                const tpLat = translitClientCyrToLat(tp);
+                return candArt.parts.includes(tp) || candArt.full.includes(tp) || candArt.fullLat.includes(tpLat) || tp.includes(candArt.full);
+            });
+            if (partHit) {
+                artistScore = 100;
+            } else {
+                const candWordSet = new Set(candArt.words);
+                let sharedWords = 0;
+                for (const tw of targetArt.words) {
+                    if (candWordSet.has(tw)) sharedWords++;
+                }
+                if (sharedWords === 0) return -1;
+                artistScore = 70 + Math.min(35, sharedWords * 15);
             }
+        }
+    } else {
+        artistScore = 40;
+    }
+
+    let durScore = 0;
+    if (duration > 0 && item.duration > 0) {
+        const diff = Math.abs(Number(item.duration) - Number(duration));
+        if (diff <= 5) durScore = 45;
+        else if (diff <= 15) durScore = 25;
+        else if (diff <= 30) durScore = 5;
+        else if (diff > 60) durScore = -60;
+    }
+
+    const syncBonus = item.syncedLyrics ? 20 : 0;
+    const total = titleScore + artistScore + durScore + syncBonus;
+    const minThreshold = meta.hasReliableArtist ? 115 : 85;
+    return total >= minThreshold ? total : -1;
+}
+
+async function fetchLrclibDirectly(rawTitle = '', rawArtist = '', duration = 0) {
+    const meta = extractClientLyricsMeta(rawTitle, rawArtist);
+    if (!meta.cleanTitle) {
+        return { found: false, synced: false, lines: [], plainLyrics: '' };
+    }
+
+    const candidates = new Map();
+    const addCandidate = (item) => {
+        if (!item || (!item.syncedLyrics && !item.plainLyrics)) return;
+        const id = item.id || `${item.artistName}::${item.trackName || item.name}::${item.duration}`;
+        if (!candidates.has(id)) candidates.set(id, item);
+    };
+
+    if (meta.cleanTitle && meta.cleanArtist) {
+        try {
+            let getUrl = `https://lrclib.net/api/get?track_name=${encodeURIComponent(meta.cleanTitle)}&artist_name=${encodeURIComponent(meta.cleanArtist)}`;
+            if (duration > 0) getUrl += `&duration=${Math.round(duration)}`;
+            addCandidate(await networkFetchJson(getUrl, 4500));
         } catch (_) {}
     }
 
-    // 2. Поисковый запрос /api/search
-    const queries = [
-        `${cleanArtist} ${cleanTitle}`.trim(),
-        cleanTitle,
-        `${cleanTitle} ${cleanArtist}`.trim()
-    ].filter(Boolean);
+    const searchUrls = [];
+    const primaryArtistPart = buildClientArtistTokens(meta.cleanArtist).parts[0] || meta.cleanArtist;
+    if (meta.hasReliableArtist) {
+        searchUrls.push(`https://lrclib.net/api/search?track_name=${encodeURIComponent(meta.cleanTitle)}&artist_name=${encodeURIComponent(meta.cleanArtist)}`);
+        if (primaryArtistPart && primaryArtistPart.toLowerCase() !== meta.cleanArtist.toLowerCase()) {
+            searchUrls.push(`https://lrclib.net/api/search?track_name=${encodeURIComponent(meta.cleanTitle)}&artist_name=${encodeURIComponent(primaryArtistPart)}`);
+        }
+        searchUrls.push(`https://lrclib.net/api/search?q=${encodeURIComponent(`${meta.cleanArtist} ${meta.cleanTitle}`)}`);
+    } else {
+        searchUrls.push(`https://lrclib.net/api/search?track_name=${encodeURIComponent(meta.cleanTitle)}`);
+        searchUrls.push(`https://lrclib.net/api/search?q=${encodeURIComponent(meta.cleanTitle)}`);
+    }
 
-    for (const q of queries) {
-        try {
-            const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`;
-            const list = await networkFetchJson(searchUrl, 5000);
-            if (Array.isArray(list) && list.length > 0) {
-                const best = list.find(item => item.syncedLyrics) || list[0];
-                if (best && (best.syncedLyrics || best.plainLyrics)) {
+    await Promise.all(
+        searchUrls.map(async (u) => {
+            try {
+                const list = await networkFetchJson(u, 4500);
+                if (Array.isArray(list)) {
+                    for (const item of list.slice(0, 15)) addCandidate(item);
+                }
+            } catch (_) {}
+        })
+    );
+
+    const scored = [];
+    for (const item of candidates.values()) {
+        const s = scoreClientLyricsCandidate(item, meta, duration);
+        if (s >= 0) scored.push({ item, score: s });
+    }
+    scored.sort((a, b) => b.score - a.score);
+
+    if (scored.length > 0) {
+        const best = scored[0].item;
+        return {
+            found: true,
+            synced: Boolean(best.syncedLyrics),
+            lines: best.syncedLyrics ? parseClientLrc(best.syncedLyrics) : [],
+            plainLyrics: best.plainLyrics || '',
+            trackName: best.trackName || best.name || meta.cleanTitle,
+            artistName: best.artistName || meta.cleanArtist,
+            source: 'LRCLIB'
+        };
+    }
+
+    if (meta.hasReliableArtist) {
+        for (const artCandidate of [meta.cleanArtist, primaryArtistPart].filter(Boolean)) {
+            try {
+                const ovhData = await networkFetchJson(`https://api.lyrics.ovh/v1/${encodeURIComponent(artCandidate)}/${encodeURIComponent(meta.cleanTitle)}`, 4000);
+                if (ovhData?.lyrics && ovhData.lyrics.trim().length > 20) {
                     return {
                         found: true,
-                        synced: Boolean(best.syncedLyrics),
-                        lines: best.syncedLyrics ? parseClientLrc(best.syncedLyrics) : [],
-                        plainLyrics: best.plainLyrics || '',
-                        trackName: best.name,
-                        artistName: best.artistName
+                        synced: false,
+                        lines: [],
+                        plainLyrics: ovhData.lyrics.trim(),
+                        trackName: meta.cleanTitle,
+                        artistName: artCandidate,
+                        source: 'Lyrics.ovh'
                     };
                 }
-            }
-        } catch (_) {}
+            } catch (_) {}
+        }
     }
 
     return { found: false, synced: false, lines: [], plainLyrics: '' };
 }
 
-async function openLyricsForTrack(track) {
+async function openLyricsForTrack(track, overrideQuery = null) {
     if (!track) return;
+    const reqId = ++activeLyricsRequestId;
     currentLyricsTrack = track;
+    currentLyricsData = null;
+
+    const searchTitle = overrideQuery?.title ?? decodeHtml(track.title || '');
+    const searchArtist = overrideQuery?.artist ?? decodeHtml(track.artist || '');
     const lang = userSettings?.language || 'ru';
-    const dict = I18N[lang] || I18N.ru;
 
     lyricsModal?.classList.add('visible');
 
@@ -2898,6 +3185,12 @@ async function openLyricsForTrack(track) {
     if (lyricsTrackTitle) lyricsTrackTitle.textContent = decodeHtml(track.title || 'Песня');
     if (lyricsTrackArtist) lyricsTrackArtist.textContent = decodeHtml(track.artist || 'DodoMusic');
     if (lyricsAmbientGlow) lyricsAmbientGlow.style.backgroundImage = `url('${track.thumbnail || 'icon.png'}')`;
+    if (lyricsMatchedMeta) {
+        lyricsMatchedMeta.style.display = 'none';
+        lyricsMatchedMeta.textContent = '';
+    }
+    if (lyricsQueryArtist && !overrideQuery) lyricsQueryArtist.value = searchArtist;
+    if (lyricsQueryTitle && !overrideQuery) lyricsQueryTitle.value = searchTitle;
 
     updateLyricsPlaySyncButtonState();
 
@@ -2915,8 +3208,9 @@ async function openLyricsForTrack(track) {
         lyricsPlainContainer.innerHTML = '';
     }
 
-    const cacheKey = `${track.title}:::${track.artist}`;
-    if (lyricsCache.has(cacheKey)) {
+    const cacheKey = `${searchTitle.trim().toLowerCase()}:::${searchArtist.trim().toLowerCase()}`;
+    if (!overrideQuery && lyricsCache.has(cacheKey)) {
+        if (reqId !== activeLyricsRequestId) return;
         currentLyricsData = lyricsCache.get(cacheKey);
         renderLyricsData(currentLyricsData);
         return;
@@ -2925,32 +3219,39 @@ async function openLyricsForTrack(track) {
     let lyricsData = null;
 
     // 1. Попытка запроса через встроенный бэкенд
-    try {
-        const queryParams = new URLSearchParams({
-            title: track.title || '',
-            artist: track.artist || '',
-            duration: track.durationSeconds || track.durationSec || 0
-        });
+    if (!isStandaloneApp) {
+        try {
+            const queryParams = new URLSearchParams({
+                title: searchTitle,
+                artist: searchArtist,
+                duration: track.durationSeconds || track.durationSec || 0
+            });
 
-        const res = await fetch(`/api/lyrics?${queryParams.toString()}`);
-        if (res.ok) {
-            const json = await res.json();
-            if (json && json.found && (json.synced || json.plainLyrics)) {
-                lyricsData = json;
+            const res = await fetch(`/api/lyrics?${queryParams.toString()}`);
+            if (reqId !== activeLyricsRequestId) return;
+            if (res.ok) {
+                const json = await res.json();
+                if (json && json.found && (json.synced || json.plainLyrics)) {
+                    lyricsData = json;
+                }
             }
-        }
-    } catch (_) {}
+        } catch (_) {}
+    }
 
-    // 2. Прямой клиентский fallback на LRCLIB (если бэкенд не вернул текст, или в Android APK)
+    if (reqId !== activeLyricsRequestId) return;
+
+    // 2. Прямой клиентский fallback на LRCLIB / Lyrics.ovh (для автономного режима или если сервер не смог)
     if (!lyricsData || !lyricsData.found) {
         try {
             lyricsData = await fetchLrclibDirectly(
-                track.title,
-                track.artist,
+                searchTitle,
+                searchArtist,
                 track.durationSeconds || track.durationSec || 0
             );
         } catch (_) {}
     }
+
+    if (reqId !== activeLyricsRequestId) return;
 
     if (lyricsData && lyricsData.found && (lyricsData.synced || lyricsData.plainLyrics)) {
         currentLyricsData = lyricsData;
@@ -2964,7 +3265,7 @@ async function openLyricsForTrack(track) {
 }
 
 function updateLyricsPlaySyncButtonState() {
-    const active = currentQueue[currentIndex];
+    const active = getActiveTrack();
     const isThisTrackActive = active && currentLyricsTrack && active.id === currentLyricsTrack.id;
     const lang = userSettings?.language || 'ru';
     const dict = I18N[lang] || I18N.ru;
@@ -2988,9 +3289,18 @@ function renderLyricsData(data) {
     if (!data || !data.found || (!data.synced && !data.plainLyrics)) {
         if (lyricsEmpty) lyricsEmpty.style.display = 'block';
         if (lyricsStatusBadge) lyricsStatusBadge.style.display = 'none';
+        if (lyricsMatchedMeta) lyricsMatchedMeta.style.display = 'none';
         if (lyricsLinesContainer) lyricsLinesContainer.style.display = 'none';
         if (lyricsPlainContainer) lyricsPlainContainer.style.display = 'none';
         return;
+    }
+
+    if (lyricsMatchedMeta) {
+        const mArtist = data.artistName || currentLyricsTrack?.artist || '';
+        const mTitle = data.trackName || currentLyricsTrack?.title || '';
+        const src = data.source || 'LRCLIB';
+        lyricsMatchedMeta.textContent = `Текст (${src}): ${mArtist} — ${mTitle}`;
+        lyricsMatchedMeta.style.display = 'inline-flex';
     }
 
     // Если текст найден - прячем заглушку пустого состояния
@@ -3043,7 +3353,7 @@ function renderLyricsData(data) {
 }
 
 function handleLyricLineClick(targetTime) {
-    const active = currentQueue[currentIndex];
+    const active = getActiveTrack();
     const isThisTrackActive = active && currentLyricsTrack && active.id === currentLyricsTrack.id;
 
     if (!isThisTrackActive && currentLyricsTrack) {
@@ -3076,7 +3386,7 @@ function handleLyricLineClick(targetTime) {
 
 function syncLyricsWithTime(currentTime) {
     if (!lyricsModal?.classList.contains('visible')) return;
-    const active = currentQueue[currentIndex];
+    const active = getActiveTrack();
     const isThisTrackActive = active && currentLyricsTrack && active.id === currentLyricsTrack.id;
     if (!isThisTrackActive) return;
 
@@ -3136,9 +3446,32 @@ lyricsAutoscrollToggle?.addEventListener('click', () => {
     }
 });
 
+lyricsEditQueryBtn?.addEventListener('click', () => {
+    if (!lyricsManualSearchRow) return;
+    const isOpen = lyricsManualSearchRow.style.display !== 'none';
+    lyricsManualSearchRow.style.display = isOpen ? 'none' : 'flex';
+    if (!isOpen && currentLyricsTrack) {
+        if (lyricsQueryArtist) lyricsQueryArtist.value = decodeHtml(currentLyricsTrack.artist || '');
+        if (lyricsQueryTitle) lyricsQueryTitle.value = decodeHtml(currentLyricsTrack.title || '');
+        lyricsQueryArtist?.focus();
+    }
+});
+
+function triggerManualLyricsSearch() {
+    if (!currentLyricsTrack) return;
+    const qArtist = (lyricsQueryArtist?.value || '').trim();
+    const qTitle = (lyricsQueryTitle?.value || '').trim();
+    if (!qTitle && !qArtist) return;
+    openLyricsForTrack(currentLyricsTrack, { artist: qArtist, title: qTitle });
+}
+
+lyricsManualSearchBtn?.addEventListener('click', triggerManualLyricsSearch);
+lyricsQueryArtist?.addEventListener('keydown', (e) => { if (e.key === 'Enter') triggerManualLyricsSearch(); });
+lyricsQueryTitle?.addEventListener('keydown', (e) => { if (e.key === 'Enter') triggerManualLyricsSearch(); });
+
 lyricsPlaySyncBtn?.addEventListener('click', () => {
     if (currentLyricsTrack) {
-        const active = currentQueue[currentIndex];
+        const active = getActiveTrack();
         if (active && active.id === currentLyricsTrack.id) {
             if (audioPlayer.paused) {
                 audioPlayer.play().catch(() => {});
@@ -3159,7 +3492,7 @@ lyricsPlaySyncBtn?.addEventListener('click', () => {
 
 playerTrackInfo?.addEventListener('click', (e) => {
     if (e.target.closest('#likeCurrentBtn') || e.target.closest('#playerArtist')) return;
-    const current = currentQueue[currentIndex];
+    const current = getActiveTrack();
     if (current) {
         openLyricsForTrack(current);
     } else {
@@ -3170,7 +3503,7 @@ playerTrackInfo?.addEventListener('click', (e) => {
 // Клик по имени артиста в шапке окна текста также открывает профиль артиста
 lyricsTrackArtist?.addEventListener('click', (e) => {
     e.stopPropagation();
-    const track = currentLyricsTrack || currentQueue[currentIndex];
+    const track = currentLyricsTrack || getActiveTrack();
     if (track?.artist) {
         closeLyricsModal();
         openArtistPage(track.artist);
@@ -3178,7 +3511,7 @@ lyricsTrackArtist?.addEventListener('click', (e) => {
 });
 
 lyricsBtn?.addEventListener('click', () => {
-    const current = currentQueue[currentIndex];
+    const current = getActiveTrack();
     if (current) {
         if (lyricsModal?.classList.contains('visible') && currentLyricsTrack?.id === current.id) {
             closeLyricsModal();
@@ -3200,7 +3533,7 @@ window.addEventListener('keydown', (e) => {
         if (lyricsModal?.classList.contains('visible')) {
             closeLyricsModal();
         } else {
-            const current = currentQueue[currentIndex];
+            const current = getActiveTrack();
             if (current) openLyricsForTrack(current);
         }
     }

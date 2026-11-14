@@ -68,7 +68,7 @@
 
             <div class="sidebar-version-badge">
                 <span class="version-dot"></span>
-                <span>DodoMusic v1.4</span>
+                <span>DodoMusic v1.5</span>
             </div>
         </aside>
 
@@ -102,7 +102,7 @@
                 <div class="topbar-actions">
                     <button id="updateBadgeBtn" class="topbar-update-btn" title="Проверить обновления DodoMusic">
                         <span class="update-dot"></span>
-                        <span class="update-ver">v1.4</span>
+                        <span class="update-ver">v1.5</span>
                         <span id="updateBadgeLabel" class="update-badge-label" data-i18n="update_badge_ok">Актуально</span>
                     </button>
                 </div>
@@ -434,11 +434,11 @@
                         <div class="update-card-box">
                             <div class="update-info-block">
                                 <div class="update-version-row">
-                                    <span class="update-chip" data-i18n="version_chip">Версия v1.4</span>
+                                    <span class="update-chip" data-i18n="version_chip">Версия v1.5</span>
                                     <span id="updateStatusText" class="update-status-badge ok" data-i18n="update_status_ok">Актуальная версия</span>
                                 </div>
                                 <p id="updateNotesText" class="update-desc" data-i18n="update_notes">
-                                    DodoMusic v1.4 — Автономное Android-приложение, плавный мобильный интерфейс без лагов, точный поиск и резервный стриминг.
+                                    DodoMusic v1.5 — Точный поиск текстов с проверкой исполнителя, защита очереди от сбоев, скачивание треков внутри приложения и исправления воспроизведения.
                                 </p>
                             </div>
                             <div class="update-actions-row">
@@ -571,7 +571,7 @@
             <img src="icon.png" class="toast-brand-avatar" alt="DodoMusic" draggable="false" />
         </div>
         <div class="toast-content">
-            <div id="toastTitle" class="toast-title">DodoMusic v1.4</div>
+            <div id="toastTitle" class="toast-title">DodoMusic v1.5</div>
             <div id="toastBody" class="toast-body">У вас установлена последняя версия!</div>
         </div>
         <button id="toastCloseBtn" class="toast-close-btn" title="Закрыть">✕</button>
@@ -611,10 +611,18 @@
                             </span>
                         </div>
                         <p id="lyricsTrackArtist" class="lyrics-artist">Исполнитель</p>
+                        <div id="lyricsMatchedMeta" class="lyrics-matched-meta" style="display: none;"></div>
                     </div>
                 </div>
 
                 <div class="lyrics-header-actions">
+                    <button id="lyricsEditQueryBtn" class="lyrics-header-btn" title="Уточнить исполнителя и название для поиска текста">
+                        <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        <span id="lyricsEditQueryText">Уточнить текст</span>
+                    </button>
                     <button id="lyricsPlaySyncBtn" class="lyrics-header-btn primary" title="Включить этот трек и синхронизировать">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                         <span id="lyricsPlaySyncText">Слушать с текстом</span>
@@ -629,6 +637,12 @@
                     <button id="closeLyricsModalBtn" class="lyrics-modal-close" title="Закрыть (Esc)">✕</button>
                 </div>
             </header>
+
+            <div id="lyricsManualSearchRow" class="lyrics-manual-search-row" style="display: none;">
+                <input type="text" id="lyricsQueryArtist" class="lyrics-manual-input" placeholder="Исполнитель (например: Miyagi & Эндшпиль)" autocomplete="off">
+                <input type="text" id="lyricsQueryTitle" class="lyrics-manual-input" placeholder="Название песни" autocomplete="off">
+                <button id="lyricsManualSearchBtn" class="lyrics-header-btn primary">Найти текст</button>
+            </div>
 
             <div class="lyrics-modal-body" id="lyricsBodyWrap">
                 <!-- Состояние загрузки -->
