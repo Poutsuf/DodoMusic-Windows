@@ -27,7 +27,21 @@ process.on('beforeExit', (code) => {
 });
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-app.setAppUserModelId('com.dodomusic.app');
+if (process.platform === 'linux') {
+    app.commandLine.appendSwitch('no-sandbox');
+}
+if (process.platform === 'win32') {
+    app.setAppUserModelId('com.dodomusic.app');
+}
+
+function getPlatformIconPath() {
+    const icoPath = path.join(__dirname, 'public', 'icon.ico');
+    const pngPath = path.join(__dirname, 'public', 'icon.png');
+    if (process.platform === 'win32' && fs.existsSync(icoPath)) {
+        return icoPath;
+    }
+    return fs.existsSync(pngPath) ? pngPath : icoPath;
+}
 
 let cachedScClientId = '39AVoiZVrdvJEMFLH8T0c5WGshQaAPRJ';
 let lastClientIdFetch = 0;
@@ -1393,13 +1407,11 @@ let tray = null;
 
 function setupSystemTray() {
     try {
-        const icoPath = path.join(__dirname, 'public', 'icon.ico');
-        const pngPath = path.join(__dirname, 'public', 'icon.png');
-        const trayIconPath = fs.existsSync(icoPath) ? icoPath : pngPath;
+        const trayIconPath = getPlatformIconPath();
         if (!fs.existsSync(trayIconPath)) return;
         if (tray) return;
 
-        tray = new Tray(trayIconPath);
+        tray = new Tray(process.platform === 'linux' ? nativeImage.createFromPath(trayIconPath).resize({ width: 24, height: 24 }) : trayIconPath);
         tray.setToolTip('DodoMusic v1.5');
 
         const contextMenu = Menu.buildFromTemplate([
@@ -1437,7 +1449,8 @@ function setupSystemTray() {
                 click: () => {
                     if (mainWindow) {
                         mainWindow.webContents.executeJavaScript(`
-                            if (typeof window.playNext === 'function') window.playNext();
+                            if (typeof window.playNextTrack === 'function') window.playNextTrack();
+                            else if (typeof window.playNext === 'function') window.playNext();
                         `);
                     }
                 },
@@ -1447,7 +1460,8 @@ function setupSystemTray() {
                 click: () => {
                     if (mainWindow) {
                         mainWindow.webContents.executeJavaScript(`
-                            if (typeof window.playPrev === 'function') window.playPrev();
+                            if (typeof window.playPrevTrack === 'function') window.playPrevTrack();
+                            else if (typeof window.playPrev === 'function') window.playPrev();
                         `);
                     }
                 },
@@ -1483,9 +1497,7 @@ async function createWindow() {
     serverInstance = server;
     logDebug(`[CREATE_WINDOW] Embedded server running on port ${port}\n`);
 
-    const icoPath = path.join(__dirname, 'public', 'icon.ico');
-    const pngIconPath = path.join(__dirname, 'public', 'icon.png');
-    const iconFilePath = fs.existsSync(icoPath) ? icoPath : pngIconPath;
+    const iconFilePath = getPlatformIconPath();
     const appIcon = nativeImage.createFromPath(iconFilePath);
 
     const winOptions = {

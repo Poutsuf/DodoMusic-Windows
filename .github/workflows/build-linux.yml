@@ -1,0 +1,55 @@
+name: Build DodoMusic for Linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to attach Linux installers to'
+        required: false
+        default: 'v1.5.0'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Linux packages (AppImage, deb, tar.gz)
+        run: npx electron-builder --linux AppImage deb tar.gz --x64
+
+      - name: List built Linux artifacts
+        run: ls -lh dist-release/
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dodomusic-linux-x64
+          path: |
+            dist-release/*.AppImage
+            dist-release/*.deb
+            dist-release/*.tar.gz
+
+      - name: Attach Linux packages to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || 'v1.5.0' }}
+        run: |
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" --title "DodoMusic $TAG_NAME" --notes "DodoMusic Linux x64 release ($TAG_NAME)"
+          fi
+          gh release upload "$TAG_NAME" dist-release/*.AppImage dist-release/*.deb dist-release/*.tar.gz --clobber

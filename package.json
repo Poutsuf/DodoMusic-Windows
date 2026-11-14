@@ -8,7 +8,8 @@
     "start": "electron electron-main.cjs",
     "server": "node server.js",
     "dev": "node --watch server.js",
-    "dist": "electron-builder --win nsis --x64"
+    "dist": "electron-builder --win nsis --x64",
+    "dist:linux": "electron-builder --linux AppImage deb tar.gz --x64"
   },
   "repository": {
     "type": "git",
@@ -58,6 +59,20 @@
       ],
       "icon": "public/icon.ico",
       "requestedExecutionLevel": "asInvoker"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "tar.gz"
+      ],
+      "icon": "public/icon.png",
+      "executableName": "dodomusic",
+      "artifactName": "DodoMusic-${version}-linux-${arch}.${ext}",
+      "category": "AudioVideo;Audio;Music;Player;",
+      "synopsis": "DodoMusic — свободный музыкальный плеер",
+      "description": "Свободный музыкальный плеер с умной волной, живыми обоями и синхронизированным текстом песен.",
+      "maintainer": "DodoMusic Team <foridorpo@gmail.com>"
     },
     "nsis": {
       "oneClick": false,
