@@ -9,7 +9,7 @@
     "server": "node server.js",
     "dev": "node --watch server.js",
     "dist": "electron-builder --win nsis --x64",
-    "dist:linux": "electron-builder --linux AppImage deb tar.gz --x64"
+    "dist:linux": "electron-builder --linux AppImage deb tar.gz --x64 --publish never"
   },
   "repository": {
     "type": "git",

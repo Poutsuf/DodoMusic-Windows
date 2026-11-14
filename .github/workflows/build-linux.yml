@@ -30,7 +30,7 @@ jobs:
         run: npm install
 
       - name: Build Linux packages (AppImage, deb, tar.gz)
-        run: npx electron-builder --linux AppImage deb tar.gz --x64
+        run: npx electron-builder --linux AppImage deb tar.gz --x64 --publish never
 
       - name: List built Linux artifacts
         run: ls -lh dist-release/
